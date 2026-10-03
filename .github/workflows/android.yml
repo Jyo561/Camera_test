@@ -1,0 +1,228 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------
+      # Checkout source code
+      # ------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------
+      # Install Rust
+      # ------------------------------------------
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # ------------------------------------------
+      # Install Trunk
+      # ------------------------------------------
+      - name: Install Trunk
+        run: |
+          curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            -o /tmp/trunk.tar.gz
+
+          tar -xzf /tmp/trunk.tar.gz -C /tmp
+
+          chmod +x /tmp/trunk
+
+          mv /tmp/trunk "$HOME/.cargo/bin/trunk"
+
+      # ------------------------------------------
+      # Build Yew application
+      # ------------------------------------------
+      - name: Build Yew application
+        run: trunk build --release
+
+      # ------------------------------------------
+      # Setup Node.js
+      # ------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # ------------------------------------------
+      # Initialize npm project
+      # ------------------------------------------
+      - name: Initialize npm project
+        run: npm init -y
+
+      # ------------------------------------------
+      # Install Capacitor + Camera + esbuild
+      # ------------------------------------------
+      - name: Install Capacitor
+        run: |
+          npm install \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android \
+            @capacitor/camera \
+            esbuild
+
+      # ------------------------------------------
+      # Initialize Capacitor
+      # ------------------------------------------
+      - name: Initialize Capacitor
+        run: |
+          npx cap init "Find My Stuff" com.example.findmystuff --web-dir dist
+
+      # ------------------------------------------
+      # Create Capacitor Camera JS bridge
+      # ------------------------------------------
+      - name: Create Camera JS bridge
+        run: |
+          mkdir -p capacitor
+
+          cat > capacitor/camera-bridge.js <<'EOF'
+          import {
+            Camera,
+            CameraResultType,
+            CameraSource
+          } from '@capacitor/camera';
+
+          // Expose a simple API for Rust/Yew.
+          //
+          // Rust expects:
+          //
+          // window.Capacitor.Plugins.Camera.getPhoto(...)
+          //
+
+          window.Capacitor = window.Capacitor || {};
+          window.Capacitor.Plugins = window.Capacitor.Plugins || {};
+
+          window.Capacitor.Plugins.Camera = {
+
+            async getPhoto(options = {}) {
+
+              const photo = await Camera.getPhoto({
+
+                quality: options.quality ?? 90,
+
+                allowEditing:
+                  options.allowEditing ?? false,
+
+                resultType:
+                  CameraResultType.DataUrl,
+
+                source:
+                  options.source === "camera"
+                    ? CameraSource.Camera
+                    : CameraSource.Prompt
+              });
+
+              return {
+                dataUrl: photo.dataUrl
+              };
+            }
+          };
+          EOF
+
+      # ------------------------------------------
+      # Bundle Camera bridge
+      # ------------------------------------------
+      - name: Bundle Camera bridge
+        run: |
+          npx esbuild \
+            capacitor/camera-bridge.js \
+            --bundle \
+            --format=iife \
+            --outfile=dist/capacitor-camera.js
+
+      # ------------------------------------------
+      # Inject Camera bridge into index.html
+      # ------------------------------------------
+      - name: Inject Camera bridge
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("dist/index.html")
+
+          html = path.read_text()
+
+          script = '<script src="capacitor-camera.js"></script>'
+
+          if "capacitor-camera.js" not in html:
+              html = html.replace(
+                  "</body>",
+                  f"{script}\n</body>"
+              )
+
+          path.write_text(html)
+          PY
+
+      # ------------------------------------------
+      # Generate Android project
+      # ------------------------------------------
+      - name: Add Android platform
+        run: npx cap add android
+
+      # ------------------------------------------
+      # Synchronize web application + plugins
+      # ------------------------------------------
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # ------------------------------------------
+      # Setup Java
+      # ------------------------------------------
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # ------------------------------------------
+      # Setup Android SDK
+      # ------------------------------------------
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -name sdkmanager \
+            -type f \
+            | head -n 1)
+
+          echo "Using sdkmanager: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+      # ------------------------------------------
+      # Build APK
+      # ------------------------------------------
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # ------------------------------------------
+      # Upload APK
+      # ------------------------------------------
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: find-my-stuff-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
