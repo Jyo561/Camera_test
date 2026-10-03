@@ -88,9 +88,9 @@ jobs:
       # ------------------------------------------
       - name: Create Camera JS bridge
         run: |
-          mkdir -p capacitor
+          mkdir -p bridge
 
-          cat > capacitor/camera-bridge.js <<'EOF'
+          cat > bridge/camera-bridge.js <<'EOF'
           import {
             Camera,
             CameraResultType,
