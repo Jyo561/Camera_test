@@ -43,7 +43,8 @@ jobs:
       # Build Yew application
       # ------------------------------------------
       - name: Build Yew application
-        run: trunk build --release
+        run: |
+          trunk build --release
 
       # ------------------------------------------
       # Setup Node.js
@@ -52,29 +53,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-     
-      # ------------------------------------------
-      # Remove accidental root npm files
-      # ------------------------------------------
-      - name: Clean root npm files
-        run: |
-          rm -f package.json package-lock.json
 
       # ------------------------------------------
       # Create temporary Capacitor workspace
       # ------------------------------------------
       - name: Create Capacitor workspace
         run: |
+          rm -rf capacitor
+
           mkdir -p capacitor
+
           cd capacitor
+
           npm init -y
 
       # ------------------------------------------
       # Install Capacitor + Camera + esbuild
       # ------------------------------------------
-      - name: Install Capacitor
-        working-directory: capacitor
+      - name: Install Capacitor dependencies
         run: |
+          cd capacitor
+
           npm install \
             @capacitor/core \
             @capacitor/cli \
@@ -86,40 +85,35 @@ jobs:
       # Initialize Capacitor
       # ------------------------------------------
       - name: Initialize Capacitor
-        working-directory: capacitor
         run: |
-          npx cap init "Find My Stuff" com.example.findmystuff --web-dir dist
+          cd capacitor
+
+          npx cap init \
+            "Find My Stuff" \
+            com.example.findmystuff \
+            --web-dir ../dist
 
       # ------------------------------------------
-      # Create Capacitor Camera JS bridge
+      # Create Camera JS bridge
       # ------------------------------------------
       - name: Create Camera JS bridge
         run: |
-          mkdir -p bridge
+          mkdir -p capacitor/bridge
 
-          cat > bridge/camera-bridge.js <<'EOF'
+          cat > capacitor/bridge/camera-bridge.js <<'EOF'
           import {
             Camera,
             CameraResultType,
             CameraSource
           } from '@capacitor/camera';
 
-          // Expose a simple API for Rust/Yew.
-          //
-          // Rust expects:
-          //
-          // window.Capacitor.Plugins.Camera.getPhoto(...)
-          //
-
           window.Capacitor = window.Capacitor || {};
           window.Capacitor.Plugins = window.Capacitor.Plugins || {};
 
           window.Capacitor.Plugins.Camera = {
-
             async getPhoto(options = {}) {
 
               const photo = await Camera.getPhoto({
-
                 quality: options.quality ?? 90,
 
                 allowEditing:
@@ -142,30 +136,46 @@ jobs:
           EOF
 
       # ------------------------------------------
+      # Verify bridge source exists
+      # ------------------------------------------
+      - name: Verify Camera bridge source
+        run: |
+          echo "Repository:"
+          pwd
+
+          echo ""
+          echo "Camera bridge:"
+          ls -lah capacitor/bridge/
+
+          echo ""
+          echo "Bridge source:"
+          sed -n '1,200p' capacitor/bridge/camera-bridge.js
+
+      # ------------------------------------------
       # Bundle Camera bridge
       # ------------------------------------------
       - name: Bundle Camera bridge
-        working-directory: capacitor
         run: |
-          npx esbuild \
-            bridge/camera-bridge.js \
+          ./capacitor/node_modules/.bin/esbuild \
+            capacitor/bridge/camera-bridge.js \
             --bundle \
             --format=iife \
-            --outfile=../dist/capacitor-camera.js
+            --outfile=dist/capacitor-camera.js
 
       # ------------------------------------------
-      # Verify generated bridge
+      # Verify generated bundle
       # ------------------------------------------
-      - name: Verify Camera bridge
+      - name: Verify Camera bundle
         run: |
-          echo "===== dist ====="
-          ls -lah dist
-
-          echo "===== Camera bundle ====="
+          echo "Generated bundle:"
           ls -lh dist/capacitor-camera.js
 
+          echo ""
+          echo "Dist contents:"
+          ls -lah dist/
+
       # ------------------------------------------
-      # Inject Camera bridge into index.html
+      # Inject Camera bridge into Yew HTML
       # ------------------------------------------
       - name: Inject Camera bridge
         run: |
@@ -174,32 +184,51 @@ jobs:
 
           path = Path("dist/index.html")
 
+          if not path.exists():
+              raise SystemExit("dist/index.html was not found")
+
           html = path.read_text()
 
           script = '<script src="capacitor-camera.js"></script>'
 
           if "capacitor-camera.js" not in html:
-              html = html.replace(
-                  "</body>",
-                  f"{script}\n</body>"
-              )
+              if "</body>" in html:
+                  html = html.replace(
+                      "</body>",
+                      script + "\n</body>"
+                  )
+              else:
+                  html += "\n" + script
 
           path.write_text(html)
+
+          print("Camera bridge injected successfully.")
           PY
+
+      # ------------------------------------------
+      # Show final index.html
+      # ------------------------------------------
+      - name: Verify index.html
+        run: |
+          grep -n "capacitor-camera" dist/index.html || true
 
       # ------------------------------------------
       # Generate Android project
       # ------------------------------------------
       - name: Add Android platform
-        working-directory: capacitor
-        run: npx cap add android
+        run: |
+          cd capacitor
+
+          npx cap add android
 
       # ------------------------------------------
-      # Synchronize web application + plugins
+      # Synchronize web application
       # ------------------------------------------
       - name: Sync Capacitor
-        working-directory: capacitor
-        run: npx cap sync android
+        run: |
+          cd capacitor
+
+          npx cap sync android
 
       # ------------------------------------------
       # Setup Java
@@ -239,7 +268,7 @@ jobs:
       # Build APK
       # ------------------------------------------
       - name: Build debug APK
-        working-directory: android
+        working-directory: capacitor/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
@@ -251,4 +280,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: find-my-stuff-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: capacitor/android/app/build/outputs/apk/debug/app-debug.apk
