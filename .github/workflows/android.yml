@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ------------------------------------------
       # Checkout source code
       # ------------------------------------------
@@ -30,7 +31,8 @@ jobs:
       # ------------------------------------------
       - name: Install Trunk
         run: |
-          curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+          curl -L \
+            https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
             -o /tmp/trunk.tar.gz
 
           tar -xzf /tmp/trunk.tar.gz -C /tmp
@@ -55,6 +57,15 @@ jobs:
           node-version: 22
 
       # ------------------------------------------
+      # Remove any accidental root npm files
+      # ------------------------------------------
+      - name: Clean root npm files
+        run: |
+          rm -f package.json
+          rm -f package-lock.json
+          rm -rf node_modules
+
+      # ------------------------------------------
       # Create temporary Capacitor workspace
       # ------------------------------------------
       - name: Create Capacitor workspace
@@ -68,7 +79,7 @@ jobs:
           npm init -y
 
       # ------------------------------------------
-      # Install Capacitor + Camera + esbuild
+      # Install Capacitor dependencies
       # ------------------------------------------
       - name: Install Capacitor dependencies
         run: |
@@ -82,6 +93,22 @@ jobs:
             esbuild
 
       # ------------------------------------------
+      # Verify npm installation
+      # ------------------------------------------
+      - name: Verify Node environment
+        run: |
+          echo "Workspace:"
+          echo "$GITHUB_WORKSPACE"
+
+          echo ""
+          echo "Capacitor package:"
+          cat capacitor/package.json
+
+          echo ""
+          echo "esbuild:"
+          ./capacitor/node_modules/.bin/esbuild --version
+
+      # ------------------------------------------
       # Initialize Capacitor
       # ------------------------------------------
       - name: Initialize Capacitor
@@ -90,17 +117,17 @@ jobs:
 
           npx cap init \
             "Find My Stuff" \
-            com.example.findmystuff \
+            "com.example.findmystuff" \
             --web-dir ../dist
 
       # ------------------------------------------
-      # Create Camera JS bridge
+      # Create Camera bridge
       # ------------------------------------------
-      - name: Create Camera JS bridge
+      - name: Create Camera bridge
         run: |
-          mkdir -p capacitor/bridge
+          mkdir -p "$GITHUB_WORKSPACE/capacitor/bridge"
 
-          cat > capacitor/bridge/camera-bridge.js <<'EOF'
+          cat > "$GITHUB_WORKSPACE/capacitor/bridge/camera-bridge.js" <<'EOF'
           import {
             Camera,
             CameraResultType,
@@ -111,6 +138,7 @@ jobs:
           window.Capacitor.Plugins = window.Capacitor.Plugins || {};
 
           window.Capacitor.Plugins.Camera = {
+
             async getPhoto(options = {}) {
 
               const photo = await Camera.getPhoto({
@@ -136,43 +164,53 @@ jobs:
           EOF
 
       # ------------------------------------------
-      # Verify bridge source exists
+      # Verify bridge source
       # ------------------------------------------
       - name: Verify Camera bridge source
         run: |
-          echo "Repository:"
-          pwd
+          echo "Bridge location:"
+          ls -lah "$GITHUB_WORKSPACE/capacitor/bridge/"
 
           echo ""
-          echo "Camera bridge:"
-          ls -lah capacitor/bridge/
-
-          echo ""
-          echo "Bridge source:"
-          sed -n '1,200p' capacitor/bridge/camera-bridge.js
+          echo "Bridge contents:"
+          cat "$GITHUB_WORKSPACE/capacitor/bridge/camera-bridge.js"
 
       # ------------------------------------------
       # Bundle Camera bridge
       # ------------------------------------------
       - name: Bundle Camera bridge
         run: |
-          ./capacitor/node_modules/.bin/esbuild \
-            capacitor/bridge/camera-bridge.js \
+          ESBUILD="$GITHUB_WORKSPACE/capacitor/node_modules/.bin/esbuild"
+
+          INPUT="$GITHUB_WORKSPACE/capacitor/bridge/camera-bridge.js"
+
+          OUTPUT="$GITHUB_WORKSPACE/dist/capacitor-camera.js"
+
+          echo "esbuild = $ESBUILD"
+          echo "input   = $INPUT"
+          echo "output  = $OUTPUT"
+
+          test -f "$INPUT"
+          test -x "$ESBUILD"
+
+          "$ESBUILD" \
+            "$INPUT" \
             --bundle \
             --format=iife \
-            --outfile=dist/capacitor-camera.js
+            --platform=browser \
+            --outfile="$OUTPUT"
 
       # ------------------------------------------
-      # Verify generated bundle
+      # Verify generated JS
       # ------------------------------------------
       - name: Verify Camera bundle
         run: |
           echo "Generated bundle:"
-          ls -lh dist/capacitor-camera.js
+          ls -lh "$GITHUB_WORKSPACE/dist/capacitor-camera.js"
 
           echo ""
-          echo "Dist contents:"
-          ls -lah dist/
+          echo "First 20 lines:"
+          head -n 20 "$GITHUB_WORKSPACE/dist/capacitor-camera.js"
 
       # ------------------------------------------
       # Inject Camera bridge into Yew HTML
@@ -185,13 +223,14 @@ jobs:
           path = Path("dist/index.html")
 
           if not path.exists():
-              raise SystemExit("dist/index.html was not found")
+              raise SystemExit("ERROR: dist/index.html does not exist")
 
           html = path.read_text()
 
           script = '<script src="capacitor-camera.js"></script>'
 
           if "capacitor-camera.js" not in html:
+
               if "</body>" in html:
                   html = html.replace(
                       "</body>",
@@ -202,15 +241,21 @@ jobs:
 
           path.write_text(html)
 
-          print("Camera bridge injected successfully.")
+          print("Camera bridge injected.")
+
           PY
 
       # ------------------------------------------
-      # Show final index.html
+      # Verify HTML
       # ------------------------------------------
-      - name: Verify index.html
+      - name: Verify final web assets
         run: |
-          grep -n "capacitor-camera" dist/index.html || true
+          echo "dist:"
+          ls -lah dist/
+
+          echo ""
+          echo "Camera bridge reference:"
+          grep -n "capacitor-camera.js" dist/index.html || true
 
       # ------------------------------------------
       # Generate Android project
@@ -222,7 +267,7 @@ jobs:
           npx cap add android
 
       # ------------------------------------------
-      # Synchronize web application
+      # Sync Capacitor
       # ------------------------------------------
       - name: Sync Capacitor
         run: |
@@ -271,6 +316,7 @@ jobs:
         working-directory: capacitor/android
         run: |
           chmod +x gradlew
+
           ./gradlew assembleDebug
 
       # ------------------------------------------
