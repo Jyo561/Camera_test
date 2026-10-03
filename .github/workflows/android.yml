@@ -138,6 +138,7 @@ jobs:
       # Bundle Camera bridge
       # ------------------------------------------
       - name: Bundle Camera bridge
+        working-directory: capacitor
         run: |
           npx esbuild \
             capacitor/camera-bridge.js \
