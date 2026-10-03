@@ -52,7 +52,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      
+     
+      # ------------------------------------------
+      # Remove accidental root npm files
+      # ------------------------------------------
+      - name: Clean root npm files
+        run: |
+          rm -f package.json package-lock.json
+
       # ------------------------------------------
       # Create temporary Capacitor workspace
       # ------------------------------------------
@@ -141,10 +148,21 @@ jobs:
         working-directory: capacitor
         run: |
           npx esbuild \
-            capacitor/camera-bridge.js \
+            bridge/camera-bridge.js \
             --bundle \
             --format=iife \
-            --outfile=dist/capacitor-camera.js
+            --outfile=../dist/capacitor-camera.js
+
+      # ------------------------------------------
+      # Verify generated bridge
+      # ------------------------------------------
+      - name: Verify Camera bridge
+        run: |
+          echo "===== dist ====="
+          ls -lah dist
+
+          echo "===== Camera bundle ====="
+          ls -lh dist/capacitor-camera.js
 
       # ------------------------------------------
       # Inject Camera bridge into index.html
