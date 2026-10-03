@@ -58,11 +58,21 @@ jobs:
       # ------------------------------------------
       - name: Initialize npm project
         run: npm init -y
+      
+      # ------------------------------------------
+      # Create temporary Capacitor workspace
+      # ------------------------------------------
+      - name: Create Capacitor workspace
+        run: |
+          mkdir -p capacitor
+          cd capacitor
+          npm init -y
 
       # ------------------------------------------
       # Install Capacitor + Camera + esbuild
       # ------------------------------------------
       - name: Install Capacitor
+        working-directory: capacitor
         run: |
           npm install \
             @capacitor/core \
@@ -75,6 +85,7 @@ jobs:
       # Initialize Capacitor
       # ------------------------------------------
       - name: Initialize Capacitor
+        working-directory: capacitor
         run: |
           npx cap init "Find My Stuff" com.example.findmystuff --web-dir dist
 
@@ -167,12 +178,14 @@ jobs:
       # Generate Android project
       # ------------------------------------------
       - name: Add Android platform
+        working-directory: capacitor
         run: npx cap add android
 
       # ------------------------------------------
       # Synchronize web application + plugins
       # ------------------------------------------
       - name: Sync Capacitor
+        working-directory: capacitor
         run: npx cap sync android
 
       # ------------------------------------------
